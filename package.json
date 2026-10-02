@@ -1,0 +1,26 @@
+{
+  "name": "billing-desk",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "One dashboard for usage, cost, balance and renewal dates of third-party services",
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,magenta \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "node --watch server/src/index.js",
+    "dev:client": "npm --prefix client run dev",
+    "build": "npm --prefix client run build",
+    "start": "NODE_ENV=production node server/src/index.js",
+    "test": "node --test \"server/test/*.test.js\"",
+    "postinstall": "npm --prefix client install"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "mysql2": "^3.11.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=20.12"
+  }
+}
