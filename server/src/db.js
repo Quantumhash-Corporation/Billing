@@ -1,10 +1,14 @@
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import mysql from 'mysql2/promise';
-import { config } from './env.js';
+import { config, rootDir } from './env.js';
 
 function sslOptions() {
   if (!config.db.ssl) return undefined;
-  if (config.db.ca) return { ca: readFileSync(config.db.ca), rejectUnauthorized: true };
+  if (config.db.ca) {
+    // a relative DB_SSL_CA is taken from the project root, wherever the server is started from
+    return { ca: readFileSync(path.resolve(rootDir, config.db.ca)), rejectUnauthorized: true };
+  }
   return { rejectUnauthorized: false };
 }
 
