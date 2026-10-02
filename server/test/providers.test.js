@@ -168,3 +168,25 @@ test('mistral sign-in: stops when there is no password step', async () => {
   const { fetchImpl } = fakeKratos({ passwordStep: false });
   await assert.rejects(login('me@example.com', 'right', fetchImpl), /did not offer a password step \(it offered: code\)/);
 });
+
+test('mistral sign-in: the password is never sent to another host', async () => {
+  const { login } = await import('../src/providers/mistral.js');
+  const posts = [];
+  const fetchImpl = async (url, init = {}) => {
+    if (init.method === 'POST') posts.push(String(url));
+    const body = { ui: { action: 'https://evil.example/self-service/login?flow=f1', nodes: [{ group: 'password', attributes: { name: 'password' } }] } };
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  await assert.rejects(login('me@example.com', 'right', fetchImpl), /unexpected address/);
+  assert.deepEqual(posts, []);
+});
+
+test('sealed secrets round-trip and fail closed', async () => {
+  process.env.SESSION_SECRET ||= 'x'.repeat(40);
+  const { seal, unseal } = await import('../src/seal.js');
+  const sealed = seal('ory_session_x="abc=="');
+  assert.notEqual(sealed, 'ory_session_x="abc=="');
+  assert.equal(unseal(sealed), 'ory_session_x="abc=="');
+  assert.equal(unseal(sealed.slice(0, -4) + 'AAAA'), null);
+  assert.equal(unseal('not-sealed'), null);
+});

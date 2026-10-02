@@ -24,6 +24,7 @@ export const config = {
     user: env.DB_USER,
     password: env.DB_PASSWORD,
     ssl: env.DB_SSL !== '0',
+    ca: (env.DB_SSL_CA || '').trim() || null,
   },
 };
 

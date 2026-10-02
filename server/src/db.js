@@ -1,5 +1,12 @@
+import { readFileSync } from 'node:fs';
 import mysql from 'mysql2/promise';
 import { config } from './env.js';
+
+function sslOptions() {
+  if (!config.db.ssl) return undefined;
+  if (config.db.ca) return { ca: readFileSync(config.db.ca), rejectUnauthorized: true };
+  return { rejectUnauthorized: false };
+}
 
 export const pool = mysql.createPool({
   host: config.db.host,
@@ -7,8 +14,9 @@ export const pool = mysql.createPool({
   database: config.db.database,
   user: config.db.user,
   password: config.db.password,
-  // The server presents a self-signed certificate: encrypt, but don't verify the chain.
-  ssl: config.db.ssl ? { rejectUnauthorized: false } : undefined,
+  // With DB_SSL_CA the server certificate is verified against that CA. Without it the
+  // connection is still encrypted, but a self-signed certificate is accepted as-is.
+  ssl: sslOptions(),
   waitForConnections: true,
   connectionLimit: 5,
   // Close connections idle for 4 minutes. The database sits behind a router that silently

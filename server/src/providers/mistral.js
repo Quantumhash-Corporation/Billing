@@ -1,3 +1,4 @@
+import { seal, unseal } from '../seal.js';
 import { deltaSince, getJson } from './http.js';
 
 // Mistral can be read in two ways:
@@ -161,6 +162,10 @@ export async function login(email, password, fetchImpl = fetch) {
       );
     }
 
+    // The form's address comes from the response; the password only ever goes to Mistral's sign-in host.
+    if (new URL(flow.ui.action).origin !== AUTH) {
+      throw new Error('Mistral pointed the sign-in at an unexpected address, so it was stopped.');
+    }
     const answer = await send(flow.ui.action, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -198,7 +203,7 @@ async function renewSession(key, state, { auto = false } = {}) {
   }
   try {
     const cookie = await login(email, password);
-    await state.set('session', { cookie, at: Date.now() });
+    await state.set('session', { sealed: seal(cookie), at: Date.now() });
     await state.set('login_failed', { at: 0 });
     return cookie;
   } catch (err) {
@@ -209,7 +214,8 @@ async function renewSession(key, state, { auto = false } = {}) {
 
 /** Try every session we know of; when all have expired, sign in again if we can. */
 async function syncViaPanel(key, state) {
-  const stored = (await state.get('session'))?.cookie;
+  const session = await state.get('session');
+  const stored = session?.sealed ? unseal(session.sealed) : null;
   const cookies = [...new Set([stored, key('MISTRAL_SESSION_COOKIE')].filter(Boolean))];
   for (const cookie of cookies) {
     try {

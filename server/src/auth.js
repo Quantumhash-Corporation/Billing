@@ -54,6 +54,10 @@ function tooManyAttempts(ip) {
 
 function recordFailure(ip) {
   const now = Date.now();
+  // forget finished lockouts, so a flood of addresses cannot grow this map without bound
+  if (attempts.size > 1000) {
+    for (const [key, entry] of attempts) if (entry.resetAt < now) attempts.delete(key);
+  }
   const entry = attempts.get(ip);
   if (!entry || entry.resetAt < now) attempts.set(ip, { count: 1, resetAt: now + WINDOW_MS });
   else entry.count += 1;

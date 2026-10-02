@@ -34,6 +34,7 @@ still tracks balance and renewal from what you enter. Restart the server after e
 | `RECALL_API_KEY`, `RECALL_REGION` | API key and workspace region |
 | `OLLAMA_API_KEY` | Ollama Cloud key |
 | `MAILBABY_API_KEY` | Mail.Baby API key |
+| `DB_SSL_CA` | Optional path to the database CA certificate, to verify the server's certificate |
 | `SYNC_INTERVAL_MINUTES` | How often every service is synced (default 60) |
 | `COOKIE_SECURE=1`, `TRUST_PROXY=1` | Set both when running behind an https reverse proxy |
 

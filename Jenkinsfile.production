@@ -1,0 +1,523 @@
+// ============================================================
+// Bapan Sardar
+// PART 1: IMPORTS
+// ============================================================
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+
+// ============================================================
+// PART 1: FUNCTIONS
+// ============================================================
+
+/**
+ * Sets a GitHub commit status.
+ *
+ * NOTE (Issue 2 — config, not code): the `context` string passed here
+ * ("Jenkins / Build", "Jenkins / Deployment") MUST be typed EXACTLY!
+ * the same, case-sensitive, in GitHub's branch ruleset under
+ * "Require status checks to pass" -> Add checks. If they don't match
+ * character-for-character, GitHub will never see them as satisfied.
+ */
+def setGitHubStatus(String state, String context, String description, String targetUrl = '') {
+    if (!env.GIT_SHA?.trim()) {
+        echo "WARNING: GIT_SHA not available yet — skipping GitHub status update for '${context}' (${state})"
+        return
+    }
+    withCredentials([string(credentialsId: 'github-status-token', variable: 'GH_TOKEN')]) {
+        def payload = JsonOutput.toJson([
+            state      : state,
+            context    : context,
+            description: description,
+            target_url : targetUrl ?: env.BUILD_URL
+        ])
+        // Fix #5: -S added for descriptive network-level errors on stderr
+        // (connection refused, DNS failure, etc) even though -s stays silent
+        // on stdout. NOT using --fail here on purpose — see Fix #6 below,
+        // we validate the HTTP code ourselves instead of letting curl exit
+        // non-zero, so we can give a precise error message per status code.
+        def httpCode = sh(
+            script: """
+                curl --connect-timeout 10 \
+                  --max-time 60 \
+                  -sS \
+                  -o /dev/null -w "%{http_code}" \
+                  -X POST \
+                  -H "Authorization: token \$GH_TOKEN" \
+                  -H "Accept: application/vnd.github+json" \
+                  ${env.GITHUB_API}/repos/${env.REPO_OWNER}/${env.REPO_NAME}/statuses/${env.GIT_SHA} \
+                  -d '${payload}'
+            """,
+            returnStdout: true
+        ).trim()
+
+        // Fix #6: allow-list success codes instead of block-listing known
+        // failures — this now also catches 500/502/503/504 etc, not just
+        // the 4 codes we happened to think of before.
+        if (!(httpCode in ['200', '201'])) {
+            error("GitHub Status API failed (HTTP ${httpCode}) for context '${context}'.")
+        }
+        echo "GitHub Status API [${context}] -> HTTP ${httpCode}"
+    }
+}
+
+/**
+ * Creates a GitHub Deployment. Returns the deployment id.
+ *
+ * NOTE (Issue 1 — conscious decision, not a bug): `required_contexts: []`
+ * means this deployment does NOT wait on any commit status before being
+ * marked available. This is intentional for now — we're managing the
+ * pending/success/failure sequencing manually via setGitHubStatus() and
+ * setDeploymentStatus() in the pipeline itself. If you later want GitHub
+ * to auto-block a deployment until specific status checks pass, set
+ * required_contexts to e.g. ['Jenkins / Build'] here.
+ */
+def createGitHubDeployment(String environmentName, String ref) {
+    if (!ref?.trim()) {
+        error("createGitHubDeployment: ref (commit SHA) is empty — cannot create deployment.")
+    }
+    def deploymentId = ''
+    withCredentials([string(credentialsId: 'github-status-token', variable: 'GH_TOKEN')]) {
+        def payload = JsonOutput.toJson([
+            ref              : ref,
+            environment      : environmentName,
+            auto_merge       : false,
+            required_contexts: [],   // intentional — see note above
+            description      : "Deployment triggered by Jenkins build #${env.BUILD_NUMBER}"
+        ])
+        def response = sh(
+            script: """
+                curl --connect-timeout 10 \
+                  --max-time 60 \
+                  -sS \
+                  -X POST \
+                  -H "Authorization: token \$GH_TOKEN" \
+                  -H "Accept: application/vnd.github+json" \
+                  ${env.GITHUB_API}/repos/${env.REPO_OWNER}/${env.REPO_NAME}/deployments \
+                  -d '${payload}'
+            """,
+            returnStdout: true
+        ).trim()
+
+        if (!response?.startsWith('{')) {
+            error("GitHub Deployment API failed: ${response}")
+        }
+
+        def json = new JsonSlurper().parseText(response)
+        if (json.message && !json.id) {
+            error("GitHub Deployment API Error: ${json.message}")
+        }
+        if (!json.id) {
+            error("GitHub Deployment API returned no deployment id.")
+        }
+        deploymentId = json.id.toString()
+    }
+    return deploymentId
+}
+
+/**
+ * Updates the status of an existing GitHub Deployment.
+ */
+def setDeploymentStatus(String deploymentId, String state, String environmentName, String targetUrl = '') {
+    if (!deploymentId) {
+        echo "WARNING: no deploymentId available, skipping deployment status update"
+        return
+    }
+    withCredentials([string(credentialsId: 'github-status-token', variable: 'GH_TOKEN')]) {
+        def payload = JsonOutput.toJson([
+            state        : state,
+            environment  : environmentName,
+            description  : "Deployment ${state} via Jenkins",
+            target_url   : targetUrl ?: env.BUILD_URL,
+            auto_inactive: true
+        ])
+        def httpCode = sh(
+            script: """
+                curl --connect-timeout 10 \
+                  --max-time 60 \
+                  -sS \
+                  -o /dev/null -w "%{http_code}" \
+                  -X POST \
+                  -H "Authorization: token \$GH_TOKEN" \
+                  -H "Accept: application/vnd.github+json" \
+                  ${env.GITHUB_API}/repos/${env.REPO_OWNER}/${env.REPO_NAME}/deployments/${deploymentId}/statuses \
+                  -d '${payload}'
+            """,
+            returnStdout: true
+        ).trim()
+
+        if (!(httpCode in ['200', '201'])) {
+            error("GitHub Deployment Status API failed (HTTP ${httpCode}) for deployment ${deploymentId}.")
+        }
+        echo "GitHub Deployment Status [${state}] -> HTTP ${httpCode}"
+    }
+}
+
+/**
+ * Checks whether a PM2 process exists at all (Fix #8 — jq-based,
+ * consistent with verifyPm2Online() below, more reliable than
+ * grepping `pm2 list` text output).
+ */
+def pm2ProcessExists(String appName) {
+    def result = sh(
+        script: """
+            pm2 jlist | jq -e '.[] | select(.name=="${appName}")' > /dev/null 2>&1 && echo "yes" || echo "no"
+        """,
+        returnStdout: true
+    ).trim()
+    return result == 'yes'
+}
+
+/**
+ * Reliable PM2 health check — parses structured JSON via `pm2 jlist`
+ * + jq instead of grepping human-readable `pm2 describe` output.
+ */
+def verifyPm2Online(String appName) {
+    def status = sh(
+        script: """
+            pm2 jlist | jq -r '.[] | select(.name=="${appName}") | .pm2_env.status'
+        """,
+        returnStdout: true
+    ).trim()
+
+    if (status != 'online') {
+        error("PM2 process '${appName}' is not online (status: '${status ?: 'not found'}').")
+    }
+    echo "PM2 [${appName}] -> online"
+}
+
+// ============================================================
+// PART 1: ENVIRONMENT / OPTIONS / TRIGGERS + PIPELINE START
+//
+// How this app is laid out (it differs from the other projects):
+//   - ONE Node process serves both the API and the built frontend
+//     (client/dist), so there is ONE PM2 process and ONE port.
+//   - package.json and package-lock.json live in the repo ROOT, the
+//     server entry file is server/src/index.js, and the server reads
+//     its settings from .env in the repo ROOT.
+// ============================================================
+pipeline {
+    agent any
+
+    parameters {
+        booleanParam(name: 'SKIP_FRONTEND', defaultValue: false, description: 'Skip frontend build (for backend-only hotfixes)')
+    }
+
+    environment {
+        GITHUB_API    = 'https://api.github.com'
+        REPO_OWNER    = 'Quantumhash-Corporation'
+        REPO_NAME     = 'Billing'
+        DEPLOY_ENV    = 'production'
+
+        // Kept OUTSIDE public_html on purpose: the checkout holds .env with
+        // database and provider credentials, and public_html is web-served.
+        DEPLOY_DIR    = '/home/quantumhash/apps/Billing'
+        REPO_DIR      = '/home/quantumhash/apps/Billing/Billing'
+        CLIENT_DIR    = '/home/quantumhash/apps/Billing/Billing/client'
+        REPO_URL      = 'git@github.com:Quantumhash-Corporation/Billing.git'
+
+        // This project's own env file on the Jenkins host (see .env.example).
+        // The port comes from SERVER_PORT in it (4600 if unset).
+        ENV_FILE      = '/var/lib/jenkins/env-files/billing.env'
+        PM2_APP       = 'Billing-backend-prod'
+    }
+
+    options {
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        disableConcurrentBuilds()
+        ansiColor('xterm')
+        skipDefaultCheckout(true)
+    }
+
+    triggers {
+        githubPush()
+    }
+
+    stages {
+
+        // ============================================================
+        // PART 2: CHECKOUT
+        // NOTE (Issue 3 — acceptable for now): manual fetch/checkout/reset
+        // is fine at current scale. If this Jenkinsfile is ever triggered
+        // by something other than a branch-head push (e.g. a specific
+        // commit build, PR merge-ref build), revisit for detached-HEAD
+        // handling. Not needed today.
+        // ============================================================
+        stage('Checkout') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    sh '''
+                        set -e
+                        if [ -d "${REPO_DIR}/.git" ]; then
+                            echo "Repo exists — pulling latest"
+                            cd ${REPO_DIR}
+                            git fetch origin --prune
+                            git config advice.detachedHead false
+                            git checkout main
+                            git reset --hard origin/main
+                            git clean -fd
+                        else
+                            echo "Fresh clone"
+                            mkdir -p ${DEPLOY_DIR}
+                            cd ${DEPLOY_DIR}
+                            git clone -b main ${REPO_URL} Billing
+                            cd Billing
+                            git config advice.detachedHead false
+                        fi
+                    '''
+                }
+                script {
+                    env.GIT_SHA = sh(script: "cd ${REPO_DIR} && git rev-parse HEAD", returnStdout: true).trim()
+                    echo "Checked out commit: ${env.GIT_SHA}"
+                    currentBuild.displayName = "#${env.BUILD_NUMBER}-${env.DEPLOY_ENV}"
+                    currentBuild.description = "Commit: ${env.GIT_SHA.take(8)}"
+                    }
+            }
+        }
+
+        // ============================================================
+        // PART 3: CREATE GITHUB DEPLOYMENT
+        // ============================================================
+        stage('Create GitHub Deployment') {
+            steps {
+                script {
+                    env.DEPLOYMENT_ID = createGitHubDeployment(env.DEPLOY_ENV, env.GIT_SHA)
+                    setDeploymentStatus(env.DEPLOYMENT_ID, 'in_progress', env.DEPLOY_ENV)
+                }
+            }
+        }
+
+        // ============================================================
+        // PART 2: GITHUB PENDING
+        // ============================================================
+        stage('GitHub Pending') {
+            steps {
+                script {
+                    setGitHubStatus('pending', 'Jenkins / Build', 'Build started...')
+                    setGitHubStatus('pending', 'Jenkins / Deployment', 'Deployment in progress...')
+                }
+            }
+        }
+
+        // ============================================================
+        // PART 2: COPY ENV
+        // One env file, copied to the repo root (where the server reads
+        // it) and readable by the owner only. Only the NAMES of the
+        // settings are checked here — values are never printed.
+        // ============================================================
+        stage('Copy Env') {
+            steps {
+                timeout(time: 2, unit: 'MINUTES') {
+                    sh '''
+                        set -e
+                        if [ ! -f "${ENV_FILE}" ]; then
+                            echo "ERROR: ${ENV_FILE} does not exist. Create it from .env.example."
+                            exit 1
+                        fi
+                        install -m 600 "${ENV_FILE}" "${REPO_DIR}/.env"
+
+                        for name in DB_HOST DB_NAME DB_USER DB_PASSWORD DASHBOARD_PASSWORD SESSION_SECRET; do
+                            if ! grep -Eq "^${name}=.+" "${REPO_DIR}/.env"; then
+                                echo "ERROR: ${name} is missing or empty in ${ENV_FILE}"
+                                exit 1
+                            fi
+                        done
+                        if ! grep -Eq "^COOKIE_SECURE=1" "${REPO_DIR}/.env"; then
+                            echo "WARNING: COOKIE_SECURE=1 is not set. Behind https it must be 1 (with TRUST_PROXY=1)."
+                        fi
+                    '''
+                }
+            }
+        }
+
+        // ============================================================
+        // PART 2: INSTALL (server dependencies, from the repo ROOT)
+        // --ignore-scripts skips the root "postinstall", which would
+        // install the client a second time; the client is installed in
+        // its own stage below.
+        // ============================================================
+        stage('Install') {
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                    dir("${REPO_DIR}") {
+                        sh '''
+                            node -e 'const [a,b]=process.versions.node.split(".").map(Number); if (a<20 || (a===20 && b<12)) { console.error("Node 20.12 or newer is required, found " + process.version); process.exit(1) }'
+                        '''
+                        sh 'npm cache verify'
+                        retry(2) {
+                            sh 'npm ci --omit=dev --ignore-scripts'
+                        }
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        // PART 2: TESTS (no database or network needed)
+        // ============================================================
+        stage('Test') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    dir("${REPO_DIR}") {
+                        sh 'npm test'
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        // PART 2: FRONTEND BUILD
+        // The server serves client/dist itself, so a build must exist
+        // even when this stage is skipped.
+        // ============================================================
+        stage('Frontend Build') {
+            when {
+                expression { return !params.SKIP_FRONTEND }
+            }
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                    dir("${CLIENT_DIR}") {
+                        sh 'rm -rf dist/'
+                        retry(2) {
+                            sh 'npm ci'
+                        }
+                        sh 'npm run build'
+                    }
+                }
+            }
+        }
+
+        stage('Verify Frontend Build') {
+            steps {
+                sh '''
+                    if [ ! -f "${CLIENT_DIR}/dist/index.html" ]; then
+                        echo "ERROR: ${CLIENT_DIR}/dist/index.html is missing. Run once without SKIP_FRONTEND."
+                        exit 1
+                    fi
+                '''
+            }
+        }
+
+        // ============================================================
+        // PART 3: PM2
+        // One process: server/src/index.js, started from the repo root
+        // with NODE_ENV=production. It serves the API and client/dist.
+        // A leftover static "frontend" process from the old two-process
+        // setup is removed, because the dashboard cannot reach /api
+        // through it.
+        //
+        // Existence checks use pm2ProcessExists() (jq-based) instead of
+        // `pm2 list | grep`.
+        // ============================================================
+        stage('PM2') {
+            steps {
+                script {
+                    if (pm2ProcessExists('Billing-frontend-prod')) {
+                        sh 'pm2 delete Billing-frontend-prod'
+                    }
+
+                    // GStrings (double quotes) so ${...} expands in Groovy.
+                    if (pm2ProcessExists(env.PM2_APP)) {
+                        sh "cd ${env.REPO_DIR} && NODE_ENV=production pm2 reload ${env.PM2_APP} --update-env"
+                    } else {
+                        sh "cd ${env.REPO_DIR} && NODE_ENV=production pm2 start server/src/index.js --name ${env.PM2_APP} --cwd ${env.REPO_DIR} --time"
+                    }
+                    verifyPm2Online(env.PM2_APP)
+
+                    sh 'pm2 save'
+                }
+            }
+        }
+
+        // ============================================================
+        // PART 4: HEALTH CHECK (hard failure)
+        // The server only starts listening after it has reached the
+        // database, so an answer from /api/session proves both. It is
+        // retried for up to a minute, then PM2 is checked again to
+        // catch a process stuck in a restart loop.
+        // ============================================================
+        stage('Health Check') {
+            steps {
+                timeout(time: 3, unit: 'MINUTES') {
+                    sh '''
+                        set -e
+                        PORT=$(grep -E '^SERVER_PORT=' "${REPO_DIR}/.env" | tail -1 | cut -d= -f2 | tr -d "\\"' ")
+                        PORT=${PORT:-4600}
+                        echo "Checking http://127.0.0.1:${PORT}"
+
+                        ok=0
+                        for attempt in $(seq 1 20); do
+                            if curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/api/session" | grep -q '"signedIn"'; then
+                                ok=1
+                                break
+                            fi
+                            sleep 3
+                        done
+                        if [ "$ok" != "1" ]; then
+                            echo "ERROR: the API did not answer on port ${PORT}. Last log lines:"
+                            pm2 logs "${PM2_APP}" --lines 40 --nostream || true
+                            exit 1
+                        fi
+
+                        curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/" | grep -q 'id="root"' \\
+                            || { echo "ERROR: the dashboard page is not being served on port ${PORT}"; exit 1; }
+                        echo "API and dashboard are answering on port ${PORT}"
+                    '''
+                    script {
+                        verifyPm2Online(env.PM2_APP)
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        // PART 4: GITHUB SUCCESS — last, so it is only reported once the
+        // deployed app has actually answered.
+        // ============================================================
+        stage('GitHub Success') {
+            steps {
+                script {
+                    setGitHubStatus('success', 'Jenkins / Build', 'Build passed')
+                    setGitHubStatus('success', 'Jenkins / Deployment', 'Deployed successfully')
+                    if (env.DEPLOYMENT_ID) {
+                        setDeploymentStatus(env.DEPLOYMENT_ID, 'success', env.DEPLOY_ENV)
+                    }
+                }
+            }
+        }
+    }
+
+    // ============================================================
+    // PART 3: FAILURE + CLEANUP
+    // ============================================================
+    post {
+        success {
+            echo 'Deployment successful!'
+        }
+        failure {
+            script {
+                try {
+                    setGitHubStatus('failure', 'Jenkins / Build', 'Build failed')
+                    setGitHubStatus('failure', 'Jenkins / Deployment', 'Deployment failed')
+                    if (env.DEPLOYMENT_ID) {
+                        setDeploymentStatus(env.DEPLOYMENT_ID, 'failure', env.DEPLOY_ENV)
+                    }
+                } catch (e) {
+                    echo "WARNING: failed to report failure status to GitHub: ${e.toString()}"
+                }
+            }
+            echo 'Deployment failed! Check logs.'
+        }
+        always {
+
+            echo 'Cleaning up workspace...'
+
+            cleanWs(
+                deleteDirs: true,
+                disableDeferredWipeout: true
+            )
+
+        }
+    }
+}
