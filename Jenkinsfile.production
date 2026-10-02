@@ -380,11 +380,19 @@ pipeline {
             steps {
                 timeout(time: 10, unit: 'MINUTES') {
                     dir("${CLIENT_DIR}") {
-                        sh 'rm -rf dist/'
                         retry(2) {
                             sh 'npm ci'
                         }
-                        sh 'npm run build'
+                        // Build next to the live folder and swap at the end: the running
+                        // app keeps serving the old dist/ until the new one is complete.
+                        sh 'rm -rf dist-new/ dist-old/'
+                        sh 'npm run build -- --outDir dist-new --emptyOutDir'
+                        sh '''
+                            set -e
+                            if [ -d dist ]; then mv dist dist-old; fi
+                            mv dist-new dist
+                            rm -rf dist-old/
+                        '''
                     }
                 }
             }
