@@ -210,9 +210,11 @@ pipeline {
 
         // Kept OUTSIDE public_html on purpose: the checkout holds .env with
         // database and provider credentials, and public_html is web-served.
-        DEPLOY_DIR    = '/home/quantumhash/apps/Billing'
-        REPO_DIR      = '/home/quantumhash/apps/Billing/Billing'
-        CLIENT_DIR    = '/home/quantumhash/apps/Billing/Billing/client'
+        // It lives in the Jenkins home because the jenkins user (which also
+        // owns the PM2 process) can always write there.
+        DEPLOY_DIR    = '/var/lib/jenkins/apps/Billing'
+        REPO_DIR      = '/var/lib/jenkins/apps/Billing/Billing'
+        CLIENT_DIR    = '/var/lib/jenkins/apps/Billing/Billing/client'
         REPO_URL      = 'git@github.com:Quantumhash-Corporation/Billing.git'
 
         // This project's own env file on the Jenkins host (see .env.example).
