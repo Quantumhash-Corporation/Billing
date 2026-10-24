@@ -42,6 +42,17 @@ export async function mapLimit(items, limit, fn) {
 }
 
 /**
+ * The ring needs a "full" mark: the highest balance seen since the last top-up.
+ * A balance that rises means money was added, so the mark restarts from there.
+ */
+export async function balancePeak(state, amount) {
+  const peak = await state.get('balance_peak');
+  const capacity = !peak || amount > peak.last ? amount : Math.max(peak.capacity, amount);
+  await state.set('balance_peak', { capacity, last: amount });
+  return capacity;
+}
+
+/**
  * Turn a running total (month-to-date, cycle-to-date) into "how much was added since
  * the last sync". The first time a total is seen it counts as zero, so a mid-month
  * install does not dump the whole month onto today.

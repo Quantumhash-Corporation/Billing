@@ -1,7 +1,7 @@
 # Billing desk
 
 One dashboard for usage, cost, remaining balance and renewal dates of OpenAI, Mistral,
-AssemblyAI, Recall.ai, Ollama Cloud and MailBaby. Node.js + Express, React (Vite), MySQL.
+AssemblyAI, Recall.ai, Ollama Cloud, MailBaby and Cheaper Inference. Node.js + Express, React (Vite), MySQL.
 
 ## Run it
 
@@ -34,6 +34,7 @@ still tracks balance and renewal from what you enter. Restart the server after e
 | `RECALL_API_KEY`, `RECALL_REGION` | API key and workspace region |
 | `OLLAMA_API_KEY` | Ollama Cloud key |
 | `MAILBABY_API_KEY` | Mail.Baby API key |
+| `CHEAPERINFERENCE_API_KEY` | Cheaper Inference key (`ci_live_…`) with `usage:read` and `account:read` scopes |
 | `DB_SSL_CA` | Path to the database CA certificate, to verify the server's certificate. `certs/db-router-ca.pem` is the MySQL Router CA for db.artlabss.com; it expires on 30 Jul 2027 and must be replaced with the new `ca.pem` from `/opt/mysqlrouter/data/` if the Router is re-bootstrapped |
 | `SYNC_INTERVAL_MINUTES` | How often every service is synced (default 60) |
 | `COOKIE_SECURE=1`, `TRUST_PROXY=1` | Set both when running behind an https reverse proxy |
@@ -48,6 +49,7 @@ still tracks balance and renewal from what you enter. Restart the server after e
 | Recall.ai | Bot hours per day | Price per hour, balance, top-ups |
 | Ollama Cloud | Share of the plan's usage window used | Plan price, renewal date |
 | MailBaby | Emails and estimated cost this billing cycle | Renewal date |
+| Cheaper Inference | Daily spend, requests, prompt tokens and the wallet balance (available, not reserved) | Nothing; top-ups only if the key lacks `account:read` |
 
 None of these services expose a balance or renewal date over their API (Mistral's balance is read from its admin panel, not an API). Balance is worked
 out as: the balance you entered, plus later top-ups, minus the cost recorded since.

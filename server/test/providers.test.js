@@ -70,6 +70,32 @@ test('ollama usage windows are read as fractions', () => {
   assert.deepEqual(parseOllama({}), []);
 });
 
+test('cheaperinference: daily spend rows and the spendable balance', async () => {
+  const { parseDaily, parseBalance } = await import('../src/providers/cheaperinference.js');
+  const rows = parseDaily({
+    daily_spend: [
+      { date: '2026-06-30', request_count: 24, spend_usd: '3.910042', prompt_tokens: 30500 },
+      { date: '2026-07-01', request_count: 0, spend_usd: '0.000000', prompt_tokens: 0 },
+    ],
+  });
+  assert.deepEqual(rows[0], { day: '2026-06-30', cost: 3.910042, units: 30500, requests: 24, breakdown: null });
+  assert.equal(rows.length, 2);
+  assert.deepEqual(parseDaily({}), []);
+  assert.deepEqual(parseBalance({ balance_usd: 124.5, available_usd: 118.02, reserved_usd: 6.48 }), {
+    amount: 118.02,
+    reserved: 6.48,
+  });
+  assert.equal(parseBalance({}), null);
+});
+
+test('balancePeak: a rise restarts the full mark, a fall keeps it', async () => {
+  const { balancePeak } = await import('../src/providers/http.js');
+  const state = memoryState();
+  assert.equal(await balancePeak(state, 50), 50);
+  assert.equal(await balancePeak(state, 40), 50);
+  assert.equal(await balancePeak(state, 90), 90);
+});
+
 test('deltaSince: first sighting counts as zero, then only the increase', async () => {
   const state = memoryState();
   assert.equal(await deltaSince(state, 'c', '2026-10', 30), 0);

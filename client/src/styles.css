@@ -32,6 +32,7 @@
   --series-recall: #eda100;
   --series-ollama: #c0348a;
   --series-mailbaby: #4a3aa7;
+  --series-cheaperinference: #0f8a9d;
 
   --display: 'Bricolage Grotesque', 'Instrument Sans', system-ui, sans-serif;
   --body: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -66,6 +67,7 @@
   --series-recall: #c98500;
   --series-ollama: #c0348a;
   --series-mailbaby: #9455d8;
+  --series-cheaperinference: #2bb5c9;
 }
 
 *,

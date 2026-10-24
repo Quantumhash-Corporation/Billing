@@ -1,5 +1,5 @@
 import { seal, unseal } from '../seal.js';
-import { deltaSince, getJson } from './http.js';
+import { balancePeak, deltaSince, getJson } from './http.js';
 
 // Mistral can be read in two ways:
 //
@@ -270,10 +270,7 @@ async function syncWithSession(cookie, state) {
   // What is left once this month's not-yet-invoiced usage is taken off the wallet.
   const amount = billing.wallet - billing.pending;
 
-  // The ring needs a "full" mark: the highest balance seen since the last top-up.
-  const peak = await state.get('balance_peak');
-  const capacity = !peak || amount > peak.last ? amount : Math.max(peak.capacity, amount);
-  await state.set('balance_peak', { capacity, last: amount });
+  const capacity = await balancePeak(state, amount);
 
   // The breakdown is a nice-to-have; a failure here must not hide the balance.
   let breakdown = null;
