@@ -46,12 +46,13 @@ still tracks balance and renewal from what you enter. Restart the server after e
 | OpenAI | Daily cost, tokens and requests per model | Balance, top-ups |
 | Mistral | With a login session: wallet balance, pending usage, usage per model. With an admin key: month-to-date cost per category | Nothing with a session; balance and top-ups with an admin key |
 | AssemblyAI | Audio hours per day (from the transcript list) | Price per hour, balance, top-ups |
-| Recall.ai | Bot hours per day | Price per hour, balance, top-ups |
+| Recall.ai | Bot hours per day, transcribed time from the bot list | Price per hour, balance, top-ups |
 | Ollama Cloud | Share of the plan's usage window used | Plan price, renewal date |
-| MailBaby | Emails and estimated cost this billing cycle | Renewal date |
+| MailBaby | Emails and estimated cost this billing cycle; the InterServer prepay balance, which only drops when an invoice is paid | Renewal date |
 | Cheaper Inference | Daily spend, requests, prompt tokens and the wallet balance (available, not reserved) | Nothing; top-ups only if the key lacks `account:read` |
 
-None of these services expose a balance or renewal date over their API (Mistral's balance is read from its admin panel, not an API). Balance is worked
+No service exposes a renewal date over its API. Cheaper Inference and MailBaby (through InterServer)
+report their balance, and Mistral's is read from its admin panel. For the others, balance is worked
 out as: the balance you entered, plus later top-ups, minus the cost recorded since.
 Enter a new "Balance right now" at any time to re-anchor it.
 
@@ -59,6 +60,7 @@ Known limits:
 
 - AssemblyAI streaming sessions are not in the transcript list, so they are not counted.
 - AssemblyAI and Recall.ai cost is hours × the price you set; match it to your plan.
+- Recall.ai transcription is counted at a fixed $0.15 per recorded hour; storage fees are not counted.
 - Recall.ai allows 5 usage requests a minute, so the first 30 days fill in over a few hours.
 - The Mistral and Ollama response formats are not fully documented; the raw answer of the
   last sync is kept in `provider_state` (`last_raw`) if a figure looks wrong.

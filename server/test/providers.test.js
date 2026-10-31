@@ -88,6 +88,44 @@ test('cheaperinference: daily spend rows and the spendable balance', async () =>
   assert.equal(parseBalance({}), null);
 });
 
+test('mailbaby: the prepay is read for funds usable on mail', async () => {
+  const { parsePrepay } = await import('../src/providers/mailbaby.js');
+  const prepay = (fields) => ({ prepay: { prepay_deleted: '0', prepay_currency: 'USD', ...fields } });
+  const body = {
+    prepays: {
+      1: prepay({ prepay_amount: '10.00', prepay_remaining: '6.97', prepay_module: null }),
+      2: prepay({ prepay_amount: '5.00', prepay_remaining: '5.00', prepay_module: 'mail' }),
+      3: prepay({ prepay_amount: '50.00', prepay_remaining: '50.00', prepay_module: 'vps' }),
+      4: prepay({ prepay_amount: '9.00', prepay_remaining: '9.00', prepay_module: null, prepay_deleted: '1' }),
+    },
+  };
+  const out = parsePrepay(body);
+  assert.ok(Math.abs(out.amount - 11.97) < 1e-9);
+  assert.equal(out.capacity, 15);
+  assert.equal(out.currency, 'USD');
+  assert.equal(parsePrepay({ prepays: {} }), null);
+  assert.equal(parsePrepay(null), null);
+});
+
+test('recall: transcribed time is what bots with a transcript recorded', async () => {
+  const { parseTranscribed } = await import('../src/providers/recall.js');
+  const bot = (transcript, start, end) => ({
+    recording_config: { transcript },
+    status_changes: [
+      { code: 'joining_call', created_at: '2026-10-28T09:00:00Z' },
+      { code: 'in_call_recording', created_at: start },
+      { code: 'recording_done', created_at: end },
+    ],
+  });
+  const out = parseTranscribed([
+    bot({ provider: {} }, '2026-10-28T09:01:00Z', '2026-10-28T09:03:00Z'),
+    bot({ provider: {} }, '2026-10-28T10:00:00Z', '2026-10-28T10:00:30Z'),
+    bot(null, '2026-10-28T11:00:00Z', '2026-10-28T12:00:00Z'),
+    { recording_config: { transcript: {} }, status_changes: [{ code: 'fatal', created_at: '2026-10-28T09:00:00Z' }] },
+  ]);
+  assert.deepEqual([...out], [['2026-10-28', 150]]);
+});
+
 test('balancePeak: a rise restarts the full mark, a fall keeps it', async () => {
   const { balancePeak } = await import('../src/providers/http.js');
   const state = memoryState();

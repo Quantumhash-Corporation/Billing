@@ -21,7 +21,11 @@ export default function StackedChart({ days, services }) {
 
   // Stacking only makes sense within one currency; use the one most services share.
   const withCost = services.filter((s) => s.costs.some((c) => c > 0));
-  const currency = withCost[0]?.currency || 'USD';
+  const shared = (c) => withCost.filter((s) => s.currency === c).length;
+  const currency = withCost.reduce(
+    (best, s) => (shared(s.currency) > shared(best) ? s.currency : best),
+    withCost[0]?.currency || 'USD',
+  );
   const series = withCost.filter((s) => s.currency === currency);
 
   if (!series.length) {
